@@ -1,6 +1,7 @@
 import torch
 from torch2trt import torch2trt
 import tensorrt
+import time
 
 
 class Model:
@@ -11,7 +12,7 @@ class Model:
             self.prune(prune_amount)
 
         if trt:
-            self.__model = torch2trt(self.__model, [input])
+            self.__model = torch2trt(self.__model, [input], fp16_mode=(input.dtype==torch.float16))
 
     def __call__(self, *args):
         return self.__model(*args)
@@ -25,24 +26,21 @@ class Model:
                 prune.remove(m, 'weight')  # make permanent
 
     def profile(self, input, experiments_count=100):
-        output = None
+        ms = None
+        print('profiling... with input type:', input.dtype) 
+
         with torch.no_grad():
-            wTime = 0
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-            output = self.__model(input) # JUST FOR WARMUP
+            torch.cuda.current_stream().synchronize()
+            t0 = time.time()
 
-            start.record()
-            for i in range(experiments_count):
-                got = self.__model(input)
+            for _ in range(experiments_count):
+                output = self.__model(input) # JUST FOR WARMUP
+                torch.cuda.current_stream().synchronize()
+            t1 = time.time()
 
-            end.record()
-            torch.cuda.synchronize()
+            ms = 1000 * (t1 - t0) / experiments_count
 
-            output = start.elapsed_time(end)/experiments_count / 10**3
-            # print('execution time in SECONDS: {}'.format(output))
-
-        return output
+        return ms
 
     def info(self):
         return ''

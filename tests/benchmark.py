@@ -22,11 +22,14 @@ preprocess = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
-input = preprocess(input_image)
-input = input.unsqueeze(0) # create a mini-batch as expected by the model
+input_16 = preprocess(input_image)
+input_32 = preprocess(input_image)
+input_16 = input_16.unsqueeze(0) # create a mini-batch as expected by the model
+input_32 = input_32.unsqueeze(0) # create a mini-batch as expected by the model
 
 # move the input and model to GPU
-input = input.cuda()
+input_16 = input_16.cuda().half()
+input_32 = input_32.cuda()
 
 models = [
     'squeezenet1_0',
@@ -35,7 +38,6 @@ models = [
     'resnet50',
     # 'resnet101',
     # 'resnet152',
-    'vgg16'
 ]
 
 modes = [
@@ -45,26 +47,19 @@ modes = [
     '_fp16_trt',
     '_fp16_trt_prune10',
     '_fp16_trt_prune30',
-    # '_fp16_trt_prune50'
+    '_fp16_trt_prune50',
 ]
 
 
 for model_name in models:
-    model = torch.hub.load('pytorch/vision:v0.6.0', model_name, pretrained=True, verbose=False).cuda().eval()
+    model_32 = torch.hub.load('pytorch/vision:v0.6.0', model_name, pretrained=True, verbose=False).cuda().eval()
+    model_16 = torch.hub.load('pytorch/vision:v0.6.0', model_name, pretrained=True, verbose=False).cuda().eval().half()
 
     print(f'==============================model: {model_name}==============================')
     for mode in modes:
         name = model_name + mode
 
         print('Model: ', name)
-        if '16' in name:
-            print('Using fp16 mode')
-            model = model.half()
-            input = input.half()
-        else:
-            print('Using fp32 mode')
-            model = model.float()
-            input = input.float()
 
         trt_mode = 'trt' in name
         if trt_mode:
@@ -75,7 +70,15 @@ for model_name in models:
             pruning_coef = float(name[-2:])/100
             print('pruning:', pruning_coef*100, '%')
 
-        optimized_model = Model(model, input, trt_mode, pruning_coef)
+        optimized_model = None
+        input = None
+        if '16' in name:
+            input = input_16
+            optimized_model = Model(model_16, input, trt_mode, pruning_coef)
+        else:
+            input = input_32
+            optimized_model = Model(model_32, input, trt_mode, pruning_coef)
+
         with torch.no_grad():
             output = optimized_model(input)
 
@@ -83,11 +86,14 @@ for model_name in models:
             idx = np.argmax(probabilities)
             print(f'{name} classification result: class {idx} with probability {probabilities[idx] :8f}')
 
-            fps = int(1 / optimized_model.profile(input, 500))
+            latency = optimized_model.profile(input, 100)
+            fps = int(1000 / latency)
 
-            print(f'fps: {fps}')
+            print(f'fps: {fps}; latency: {latency} ms')
 
             print()
 
         torch.cuda.empty_cache()
+        optimized_model = None
+        input = None
     print()
