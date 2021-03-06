@@ -5,14 +5,18 @@ import time
 
 
 class Model:
-    def __init__(self, model, input, trt=True, prune_amount=0, verbose=False):
+    def __init__(self, model, input, trt=True, prune_amount=0, verbose=False, force_fp16=False):
         self.__model = model
 
         if prune_amount >= 0.1:
             self.prune(prune_amount)
 
         if trt:
-            self.__model = torch2trt(self.__model, [input], fp16_mode=(input.dtype==torch.float16))
+            fp16_mode = force_fp16
+            if isinstance(input, torch.Tensor):
+                fp16_mode = input.dtype==torch.float16 or force_fp16
+
+            self.__model = torch2trt(self.__model, [input], fp16_mode=fp16_mode)
 
     def __call__(self, *args):
         return self.__model(*args)
@@ -27,7 +31,6 @@ class Model:
 
     def profile(self, input, experiments_count=100):
         ms = None
-        print('profiling... with input type:', input.dtype) 
 
         with torch.no_grad():
             torch.cuda.current_stream().synchronize()
